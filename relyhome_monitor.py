@@ -17,6 +17,8 @@ RELY_HOME_URL = "https://relyhome.com/jobs/accept/available-swo.php?vid=Lp1QeQv_
 
 MAX_DISTANCE_MILES = 18.0
 STATE_FILE = "/home/node/.hermes/scripts/relyhome_seen.json"
+MAX_JOBS_PER_DAY = 8
+from datetime import datetime, timezone
 # Base URL for resolving relative links from the portal
 RELY_HOME_BASE = "https://relyhome.com/jobs/accept/"
 
@@ -80,16 +82,22 @@ class RelyHomeParser(HTMLParser):
 
 
 def load_seen():
-    """Load previously seen job URLs."""
+    """Load previously seen job URLs and daily accepted count."""
     try:
         with open(STATE_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"seen_urls": []}
+        data = {"seen_urls": []}
+    # Ensure daily tracking fields exist
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if "accepted_today" not in data or data.get("accepted_date") != today:
+        data["accepted_today"] = 0
+        data["accepted_date"] = today
+    return data
 
 
 def save_seen(seen):
-    """Save seen job URLs."""
+    """Save seen job URLs and daily count."""
     with open(STATE_FILE, "w") as f:
         json.dump(seen, f, indent=2)
 
@@ -254,6 +262,14 @@ def main():
     # Find new close jobs
     new_close_jobs = [j for j in close_jobs if j["accept_url"] not in seen_urls]
     
+    # Check daily limit
+    accepted_today = seen.get("accepted_today", 0)
+    remaining_slots = max(0, MAX_JOBS_PER_DAY - accepted_today)
+    
+    # Only process up to remaining slots
+    if len(new_close_jobs) > remaining_slots:
+        new_close_jobs = new_close_jobs[:remaining_slots]
+    
     # For new close jobs, fetch their detail pages to get service fee
     for job in new_close_jobs:
         # Resolve relative URLs to absolute for consistent storage
@@ -279,6 +295,9 @@ def main():
         "total_available": len(jobs),
         "within_18mi": len(close_jobs),
         "new_within_18mi": len(new_close_jobs),
+        "accepted_today": accepted_today,
+        "remaining_today": remaining_slots,
+        "max_per_day": MAX_JOBS_PER_DAY,
         "new_jobs": new_close_jobs,
         "all_close_jobs": close_jobs,
         "all_jobs_summary": [

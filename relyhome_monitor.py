@@ -148,12 +148,91 @@ def fetch_job_details(url):
     # Try to find customer info
     for pattern_name, pattern in [
         ("customer_name", r'(?:customer|homeowner|name)[:\s]*([A-Z][a-z]+ [A-Z][a-z]+)'),
-        ("phone", r'(?:phone|tel)[:\s]*([\d\-\(\)\s]{10,})'),
-        ("email", r'[\w\.\-]+@[\w\.\-]+\.\w+'),
     ]:
         match = re.search(pattern, html, re.IGNORECASE)
         if match:
             details[pattern_name] = match.group(1) if match.lastindex else match.group(0)
+    
+    # Capture ALL phone numbers (not just the first)
+    phone_matches = re.findall(r'(?:\(\d{3}\)\s*\d{3}[\-\s]?\d{4}|\d{3}[\.\-\s]\d{3}[\.\-\s]\d{4}|\d{10})', html)
+    if phone_matches:
+        # Deduplicate while preserving order
+        seen_phones = set()
+        unique_phones = []
+        for p in phone_matches:
+            cleaned = re.sub(r'[^\d]', '', p)
+            if cleaned not in seen_phones and len(cleaned) >= 10:
+                seen_phones.add(cleaned)
+                unique_phones.append(p.strip())
+        details["phones"] = unique_phones
+        details["phone"] = unique_phones[0]  # backward compat
+    
+    # Capture ALL email addresses
+    email_matches = re.findall(r'[\w\.\-\+]+@[\w\.\-]+\.\w+', html)
+    if email_matches:
+        seen_emails = set()
+        unique_emails = []
+        for e in email_matches:
+            el = e.lower()
+            if el not in seen_emails:
+                seen_emails.add(el)
+                unique_emails.append(e)
+        details["emails"] = unique_emails
+        details["email"] = unique_emails[0]  # backward compat
+    
+    # Try to find the Print SWO link for full customer details
+    swo_link_match = re.search(r'href="(https?://relyhome\.com/jobs/swo\.php\?[^"]+)"', html)
+    if swo_link_match:
+        details["swo_url"] = swo_link_match.group(1)
+    
+    return details
+
+
+def fetch_swo_details(url):
+    """Fetch the Print SWO page to get phone numbers and email."""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+    })
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+        html = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        return {"error": str(e)}
+    
+    details = {}
+    
+    # Extract ALL phone numbers from SWO page
+    phone_matches = re.findall(r'Phone:\s*(\d{10})', html)
+    if phone_matches:
+        seen_phones = set()
+        unique_phones = []
+        for p in phone_matches:
+            if p not in seen_phones:
+                seen_phones.add(p)
+                # Format as (XXX) XXX-XXXX
+                formatted = f"({p[:3]}) {p[3:6]}-{p[6:]}"
+                unique_phones.append(formatted)
+        details["phones"] = unique_phones
+    
+    # Extract email
+    email_match = re.search(r'Email:\s*([\w\.\-\+]+@[\w\.\-]+\.\w+)', html)
+    if email_match:
+        details["email"] = email_match.group(1)
+    
+    # Extract best phone
+    best_phone_match = re.search(r'Best Phone:\s*(\d{10})', html)
+    if best_phone_match:
+        p = best_phone_match.group(1)
+        details["best_phone"] = f"({p[:3]}) {p[3:6]}-{p[6:]}"
+    
+    # Extract issue/notes
+    issue_match = re.search(r'Issue:\s*([^\n<]+)', html)
+    if issue_match:
+        details["issue"] = issue_match.group(1).strip()
+    
+    notes_match = re.search(r'More Notes:\s*([^\n<]+)', html)
+    if notes_match:
+        details["notes"] = notes_match.group(1).strip()
     
     return details
 
